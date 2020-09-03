@@ -1,7 +1,8 @@
 // See LICENSE for license details.
 package sifive.blocks.util
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 import Chisel.ImplicitConversions._
 import freechips.rocketchip.regmapper._
 import freechips.rocketchip.util.WideCounter
@@ -54,7 +55,7 @@ object DefaultGenericTimerCfgDescs  {
     center = Seq.tabulate(ncmp){ i => RegFieldDesc(s"${prefix}cmp${i}center", s"Comparator ${i} Center")},
     extra = Seq.tabulate(ncmp){ i => RegFieldDesc(s"${prefix}extra${i}", s"Comparator ${i} Extra")},
     gang = Seq.tabulate(ncmp){ i => RegFieldDesc(s"${prefix}gang${i}", s"Comparator ${i}/${(i+1) % ncmp} Gang")},
-    ip = Seq.tabulate(ncmp){ i => RegFieldDesc(s"${prefix}ip${i}", s"Interrupt ${i} Pending")}
+    ip = Seq.tabulate(ncmp){ i => RegFieldDesc(s"${prefix}ip${i}", s"Interrupt ${i} Pending", volatile=true)}
   )
 }
 
@@ -202,9 +203,7 @@ trait GenericTimer {
   protected lazy val zerocmp = RegEnable(io.regs.cfg.write.zerocmp, io.regs.cfg.write_zerocmp && unlocked)
   protected val cmp = io.regs.cmp.map(c => RegEnable(c.write.bits, c.write.valid && unlocked))
 
-  protected val count = WideCounter(countWidth, countEn, reset = false)
-  when (io.regs.countLo.write.valid && unlocked) { count := Cat(count >> regWidth, io.regs.countLo.write.bits) }
-  if (countWidth > regWidth) when (io.regs.countHi.write.valid && unlocked) { count := Cat(io.regs.countHi.write.bits, count(regWidth-1, 0)) }
+  protected val count = WideCounter(countWidth, countEn, reset = true)
 
   // generate periodic interrupt
   protected val s = (count >> scale)(cmpWidth-1, 0)
@@ -212,6 +211,8 @@ trait GenericTimer {
   protected val elapsed = Vec.tabulate(ncmp){i => Mux(s(cmpWidth-1) && center(i), ~s, s) >= cmp(i)}
   protected val countReset = feed || (zerocmp && elapsed(0))
   when (countReset) { count := 0 }
+  when (io.regs.countLo.write.valid && unlocked) { count := Cat(count >> regWidth, io.regs.countLo.write.bits) }
+  if (countWidth > regWidth) when (io.regs.countHi.write.valid && unlocked) { count := Cat(io.regs.countHi.write.bits, count(regWidth-1, 0)) }
 
   io.regs.cfg.read := new GenericTimerCfgReg(maxcmp, scaleWidth).fromBits(0.U)
   io.regs.cfg.read.ip := ip
@@ -221,7 +222,7 @@ trait GenericTimer {
   io.regs.cfg.read.running := countAwake || oneShot
   io.regs.cfg.read.countAlways := countAlways
   io.regs.cfg.read.deglitch := deglitch
-  io.regs.cfg.read.deglitch := zerocmp
+  io.regs.cfg.read.zerocmp := zerocmp
   io.regs.cfg.read.sticky := rsten || sticky
   io.regs.cfg.read.scale := scale
 

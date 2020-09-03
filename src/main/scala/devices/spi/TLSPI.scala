@@ -1,7 +1,8 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.spi
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.regmapper._
@@ -13,6 +14,7 @@ import sifive.blocks.util.{NonBlockingEnqueue, NonBlockingDequeue}
 import freechips.rocketchip.diplomaticobjectmodel.model.{OMComponent, OMRegister}
 import freechips.rocketchip.diplomaticobjectmodel.logicaltree.{LogicalModuleTree, LogicalTreeNode}
 import freechips.rocketchip.diplomaticobjectmodel.DiplomaticObjectModelAddressing
+import sifive.blocks.util._
 
 trait SPIParamsBase {
   val rAddress: BigInt
@@ -26,6 +28,7 @@ trait SPIParamsBase {
   val fineDelayBits: Int
   val sampleDelayBits: Int
   val defaultSampleDel:Int
+  val oeDisableDummy: Boolean
 
   lazy val csIdBits = log2Up(csWidth)
   lazy val lengthBits = log2Floor(frameBits) + 1
@@ -47,14 +50,16 @@ case class SPIParams(
     divisorBits: Int = 12,
     fineDelayBits: Int = 0,
     sampleDelayBits: Int = 5,
-    defaultSampleDel: Int = 3
+    defaultSampleDel: Int = 3,
+    oeDisableDummy: Boolean = false
     )
-  extends SPIParamsBase {
+  extends SPIParamsBase with DeviceParams {
 
   require(frameBits >= 4)
   require((fineDelayBits == 0) | (fineDelayBits == 5), s"Require fine delay bits to be 0 or 5 and not $fineDelayBits")
   require(sampleDelayBits >= 0)
   require(defaultSampleDel >= 0)
+  require(!oeDisableDummy)
 }
 
 class SPITopModule(c: SPIParamsBase, outer: TLSPIBase)
@@ -88,8 +93,8 @@ class SPITopModule(c: SPIParamsBase, outer: TLSPIBase)
                RegFieldDesc("sckmode_pol", "Serial clock polarity", reset=Some(0))))),
     SPICRs.csid -> Seq(RegField(c.csIdBits, ctrl.cs.id,
                        RegFieldDesc("csid", "Chip select id", reset=Some(0)))),
-    SPICRs.csdef -> ctrl.cs.dflt.map(x => RegField(1, x,
-                    RegFieldDesc("csdef", "Chip select default", group = Some("csdef"), groupDesc = Some("Chip select default"), reset=Some(1)))),
+    SPICRs.csdef -> ctrl.cs.dflt.zipWithIndex.map{ case (x, i) => RegField(1, x,
+                    RegFieldDesc(s"csdef$i", s"Chip select ${i} default", group = Some("csdef"), groupDesc = Some("Chip select default"), reset=Some(1)))},
     SPICRs.csmode -> Seq(RegField(SPICSMode.width, ctrl.cs.mode,
                          RegFieldDesc("csmode", "Chip select mode", reset=Some(SPICSMode.Auto.litValue())))),
     SPICRs.dcssck -> Seq(RegField(c.delayBits, ctrl.dla.cssck,

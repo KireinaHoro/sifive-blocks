@@ -1,7 +1,8 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.spi
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.regmapper._
@@ -11,6 +12,7 @@ import freechips.rocketchip.util.HeterogeneousBag
 import freechips.rocketchip.diplomaticobjectmodel.model.{OMComponent, OMRegister}
 import freechips.rocketchip.diplomaticobjectmodel.logicaltree.{LogicalModuleTree, LogicalTreeNode}
 import freechips.rocketchip.diplomaticobjectmodel.DiplomaticObjectModelAddressing
+import sifive.blocks.util._
 
 trait SPIFlashParamsBase extends SPIParamsBase {
   val fAddress: BigInt
@@ -35,9 +37,10 @@ case class SPIFlashParams(
     divisorBits: Int = 12,
     fineDelayBits: Int = 0,
     sampleDelayBits: Int = 5,
-    defaultSampleDel: Int = 3
+    defaultSampleDel: Int = 3,
+    oeDisableDummy: Boolean = false
     )
-  extends SPIFlashParamsBase {
+  extends SPIFlashParamsBase with DeviceParams {
   val frameBits = 8
   val insnAddrBytes = 4
   val insnPadLenBits = 4
@@ -115,8 +118,8 @@ class SPIFlashTopModule(c: SPIFlashParamsBase, outer: TLSPIFlashBase)
 
 abstract class TLSPIFlashBase(w: Int, c: SPIFlashParamsBase)(implicit p: Parameters) extends TLSPIBase(w,c)(p) {
   require(isPow2(c.fSize))
-  val fnode = TLManagerNode(Seq(TLManagerPortParameters(
-    managers = Seq(TLManagerParameters(
+  val fnode = TLManagerNode(Seq(TLSlavePortParameters.v1(
+    managers = Seq(TLSlaveParameters.v1(
       address     = Seq(AddressSet(c.fAddress, c.fSize-1)),
       resources   = device.reg("mem"),
       regionType  = RegionType.UNCACHED,
@@ -143,6 +146,15 @@ class TLSPIFlash(w: Int, c: SPIFlashParams)(implicit p: Parameters)
 
   val logicalTreeNode = new LogicalTreeNode(() => Some(device)) {
     def getOMComponents(resourceBindings: ResourceBindings, children: Seq[OMComponent] = Nil): Seq[OMComponent] = {
+      // Get all the memory regions, but don't associate a register map to any of them yet
+      val diplomaticRegions = DiplomaticObjectModelAddressing.getOMMemoryRegions("SPIXIP", resourceBindings/*, Some(module.omRegMap)*/)
+      // The regmap goes with the "control" region so add it and don't alter the others.
+      require(diplomaticRegions.exists(_.description == "control"),
+        "There should be a memory region with description \"control\" to connect the regmap to")
+      val memoryRegions = diplomaticRegions.map{ memRegion =>
+        if (memRegion.description == "control") { memRegion.copy(registerMap = Some(module.omRegMap)) } else {memRegion}
+      }
+
       Seq(
         OMSPIXIP(
           rxDepth = c.rxDepth,
@@ -159,7 +171,7 @@ class TLSPIFlash(w: Int, c: SPIFlashParams)(implicit p: Parameters)
           instructionPadLengthBits = c.insnPadLenBits,
           memMapAddressBase = c.fAddress,
           memMapAddressSizeBytes = c.fSize,
-          memoryRegions = DiplomaticObjectModelAddressing.getOMMemoryRegions("SPIXIP", resourceBindings, Some(module.omRegMap)),
+          memoryRegions = memoryRegions,
           interrupts = DiplomaticObjectModelAddressing.describeGlobalInterrupts(device.describe(resourceBindings).name, resourceBindings)
         )
       )

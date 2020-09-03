@@ -1,7 +1,8 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.mockaon
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 import freechips.rocketchip.config.Field
 import freechips.rocketchip.devices.debug.HasPeripheryDebug
 import freechips.rocketchip.devices.tilelink.CanHavePeripheryCLINT
@@ -19,7 +20,7 @@ trait HasPeripheryMockAON extends CanHavePeripheryCLINT with HasPeripheryDebug {
   val mockAONParams= p(PeripheryMockAONKey)
   val aon = LazyModule(new MockAONWrapper(cbus.beatBytes, mockAONParams))
   aon.node := cbus.coupleTo("aon") { TLAsyncCrossingSource() := TLFragmenter(cbus) := _ }
-  ibus.fromSync := IntSyncCrossingSink() := aon.intnode
+  ibus.fromSync := IntSyncAsyncCrossingSink() := aon.intnode
 }
 
 trait HasPeripheryMockAONBundle {

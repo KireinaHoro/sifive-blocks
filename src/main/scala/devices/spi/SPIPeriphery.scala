@@ -1,15 +1,18 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.spi
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 import freechips.rocketchip.config.Field
 import freechips.rocketchip.subsystem.{BaseSubsystem}
 import freechips.rocketchip.diplomacy._
 
-case object PeripherySPIKey extends Field[Seq[SPIParams]]
+case object PeripherySPIKey extends Field[Seq[SPIParams]](Nil)
 
 trait HasPeripherySPI { this: BaseSubsystem =>
-  val spiNodes = p(PeripherySPIKey).map { ps => SPI.attach(SPIAttachParams(ps, pbus, ibus.fromAsync)).ioNode.makeSink() }
+  val spiNodes = p(PeripherySPIKey).map { ps =>
+    SPIAttachParams(ps).attachTo(this).ioNode.makeSink() 
+  }
 }
 
 trait HasPeripherySPIBundle {
@@ -21,11 +24,11 @@ trait HasPeripherySPIModuleImp extends LazyModuleImp with HasPeripherySPIBundle 
   val spi  = outer.spiNodes.zipWithIndex.map  { case(n,i) => n.makeIO()(ValName(s"spi_$i")) }
 }
 
-case object PeripherySPIFlashKey extends Field[Seq[SPIFlashParams]]
+case object PeripherySPIFlashKey extends Field[Seq[SPIFlashParams]](Nil)
 
 trait HasPeripherySPIFlash { this: BaseSubsystem =>
   val qspiNodes = p(PeripherySPIFlashKey).map { ps =>
-    SPI.attachFlash(SPIFlashAttachParams(ps, pbus, pbus, ibus.fromAsync, fBufferDepth = 8)).ioNode.makeSink()
+    SPIFlashAttachParams(ps, fBufferDepth = 8).attachTo(this).ioNode.makeSink()
   }
 }
 

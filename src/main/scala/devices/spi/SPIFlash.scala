@@ -1,7 +1,8 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.spi
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 import freechips.rocketchip.diplomaticobjectmodel.DiplomaticObjectModelAddressing
 import freechips.rocketchip.diplomaticobjectmodel.model.{OMComponent, OMRegister}
 import freechips.rocketchip.diplomaticobjectmodel.logicaltree.{LogicalModuleTree, LogicalTreeNode}
@@ -71,6 +72,7 @@ class SPIFlashMap(c: SPIFlashParamsBase) extends Module {
   io.link.cs.clear := Bool(false)
   io.link.cs.hold := Bool(true)
   io.link.lock := Bool(true)
+  io.link.disableOE.foreach ( _ := false.B)
 
   io.addr.ready := Bool(false)
   io.data.valid := Bool(false)
@@ -142,6 +144,7 @@ class SPIFlashMap(c: SPIFlashParamsBase) extends Module {
     is (s_pad) {
       io.link.cnt := insn.pad.cnt
       io.link.tx.bits := insn.pad.code
+      io.link.disableOE.foreach(_ := true.B)
       when (io.link.tx.ready) {
         state := s_data_pre
       }

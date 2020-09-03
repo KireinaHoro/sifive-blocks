@@ -1,13 +1,15 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.spi
 
-import Chisel._
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
 
 abstract class SPIBundle(val c: SPIParamsBase) extends Bundle
 
 class SPIDataIO extends Bundle {
   val i = Bool(INPUT)
   val o = Bool(OUTPUT)
+  val ie = Bool(OUTPUT)
   val oe = Bool(OUTPUT)
 }
 

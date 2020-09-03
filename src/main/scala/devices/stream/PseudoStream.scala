@@ -1,17 +1,23 @@
 // See LICENSE for license details.
 package sifive.blocks.devices.stream
 
-import Chisel._
-import freechips.rocketchip.config.Parameters
+import Chisel.{defaultCompileOptions => _, _}
+import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
+
+import freechips.rocketchip.config.{Field, Parameters}
 import freechips.rocketchip.diplomacy._
+import freechips.rocketchip.prci._
 import freechips.rocketchip.regmapper._
+import freechips.rocketchip.subsystem._
 import freechips.rocketchip.tilelink._
-import sifive.blocks.util.{BasicBusBlocker, NonBlockingEnqueue, NonBlockingDequeue}
+import freechips.rocketchip.devices.tilelink._
+
+import sifive.blocks.util._
 
 case class PseudoStreamParams(
     address: BigInt,
     nChannels: Int = 1,
-    dataBits: Int = 32) {
+    dataBits: Int = 32) extends DeviceParams {
   require(dataBits <= 63)
 }
 
@@ -87,41 +93,56 @@ abstract class PseudoStream(busWidthBytes: Int, val params: PseudoStreamParams)(
 class TLPseudoStream(busWidthBytes: Int, params: PseudoStreamParams)(implicit p: Parameters)
   extends PseudoStream(busWidthBytes, params) with HasTLControlRegMap
 
+case class PseudoStreamLocated(loc: HierarchicalLocation) extends Field[Seq[PseudoStreamAttachParams]](Nil)
+
 case class PseudoStreamAttachParams(
-  stream: PseudoStreamParams,
-  controlBus: TLBusWrapper,
+  device: PseudoStreamParams,
+  controlWhere: TLBusWrapperLocation = SBUS,
   blockerAddr: Option[BigInt] = None,
-  controlXType: ClockCrossingType = NoCrossing,
-  mclock: Option[ModuleValue[Clock]] = None,
-  mreset: Option[ModuleValue[Bool]] = None)
-  (implicit val p: Parameters)
+  controlXType: ClockCrossingType = NoCrossing) extends DeviceAttachParams
+{
+  def attachTo(where: Attachable)(implicit p: Parameters): TLPseudoStream = where {
+    val name = s"stream_${PseudoStream.nextId()}"
+    val tlbus = where.locateTLBusWrapper(controlWhere)
+    val streamClockDomainWrapper = LazyModule(new ClockSinkDomain(take = None))
+    val stream = streamClockDomainWrapper { LazyModule(new TLPseudoStream(tlbus.beatBytes, device)) }
+    stream.suggestName(name)
+
+    tlbus.coupleTo(s"device_named_$name") { bus =>
+
+      val blockerOpt = blockerAddr.map { a =>
+        val blocker = LazyModule(new TLClockBlocker(BasicBusBlockerParams(a, tlbus.beatBytes, tlbus.beatBytes)))
+        tlbus.coupleTo(s"bus_blocker_for_$name") { blocker.controlNode := TLFragmenter(tlbus) := _ }
+        blocker
+      }
+
+      streamClockDomainWrapper.clockNode := (controlXType match {
+        case _: SynchronousCrossing =>
+          tlbus.dtsClk.map(_.bind(stream.device))
+          tlbus.fixedClockNode
+        case _: RationalCrossing =>
+          tlbus.clockNode
+        case _: AsynchronousCrossing =>
+          val streamClockGroup = ClockGroup()
+          streamClockGroup := where.asyncClockGroupsNode
+          blockerOpt.map { _.clockNode := streamClockGroup } .getOrElse { streamClockGroup }
+      })
+
+      (stream.controlXing(controlXType)
+        := TLFragmenter(tlbus)
+        := blockerOpt.map { _.node := bus } .getOrElse { bus })
+    }
+
+    stream
+  }
+}
 
 object PseudoStream {
   val nextId = { var i = -1; () => { i += 1; i} }
 
-  def attach(params: PseudoStreamAttachParams): TLPseudoStream = {
-    implicit val p = params.p
-    val name = s"stream_${nextId()}"
-    val cbus =  params.controlBus
-    val stream = LazyModule(new TLPseudoStream(cbus.beatBytes, params.stream))
-    stream.suggestName(name)
-
-    cbus.coupleTo(s"device_named_$name") { bus =>
-      val blockerNode = params.blockerAddr.map(BasicBusBlocker(_, cbus, cbus.beatBytes, name))
-      (stream.controlXing(params.controlXType)
-        := TLFragmenter(cbus.beatBytes, cbus.blockBytes)
-        := blockerNode.map { _ := bus } .getOrElse { bus })
-    }
-    InModuleBody { stream.module.clock := params.mclock.map(_.getWrappedValue).getOrElse(cbus.module.clock) }
-    InModuleBody { stream.module.reset := params.mreset.map(_.getWrappedValue).getOrElse(cbus.module.reset) }
-
-    stream
-  }
-
-  def attachAndMakePort(params: PseudoStreamAttachParams): ModuleValue[PseudoStreamPortIO] = {
-    val stream = attach(params)
-    val streamNode = stream.ioNode.makeSink()(params.p)
-    InModuleBody { streamNode.makeIO()(ValName(stream.name)) }
+  def makePort(node: BundleBridgeSource[PseudoStreamPortIO], name: String)(implicit p: Parameters): ModuleValue[PseudoStreamPortIO] = {
+    val streamNode = node.makeSink()
+    InModuleBody { streamNode.makeIO()(ValName(name)) }
   }
 
   def tieoff(port: PseudoStreamPortIO) {
